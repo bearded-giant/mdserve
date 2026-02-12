@@ -140,6 +140,7 @@ mdserve README.md --open
 - Scans and serves all `.md` and `.markdown` files in that directory
 - Displays a navigation sidebar for easy switching between files
 - Watches for new markdown files added to the directory
+- Serves images from subdirectories (e.g. `![diagram](images/arch.png)`)
 - Only monitors the immediate directory (non-recursive)
 
 
@@ -172,8 +173,8 @@ cargo build --release
 # Run all tests
 cargo test
 
-# Run integration tests only
-cargo test --test integration_test
+# Run a single test by name substring
+cargo test test_server_starts
 ```
 
 ## Contributing

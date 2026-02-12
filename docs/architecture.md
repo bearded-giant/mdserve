@@ -109,12 +109,14 @@ File changes flow:
 
 Single unified router handles both modes:
 - `GET /` → First file alphabetically
-- `GET /:filename.md` → Specific markdown file
-- `GET /:filename.<ext>` → Images from base directory
+- `GET /*filepath` → Markdown files (matched by basename) or images (including subdirectories)
 - `GET /ws` → WebSocket connection
 - `GET /mermaid.min.js` → Bundled Mermaid library
 
-The `:filename` pattern rejects paths with `/`, preventing directory traversal.
+The `/*filepath` wildcard route serves both markdown and images. Markdown lookup
+uses the basename only (tracked files are flat), while image paths can include
+subdirectories (e.g. `images/arch.png`). Directory traversal is blocked by
+`canonicalize` + `starts_with(base_dir)` validation in the static file handler.
 
 ### Rendering
 
@@ -138,12 +140,12 @@ Template variables:
 
 **Pre-rendered caching**: All tracked files rendered to HTML in memory on startup and file change. Serving always from memory, never from disk.
 
-**Non-recursive watching**: Only immediate directory, no subdirectories. Simplifies security and state management.
+**Non-recursive watching**: Only the immediate directory is watched for markdown changes, no subdirectories. Images in subdirectories are served on request but not watched.
 
 **Server-side logic**: Most logic lives server-side (markdown rendering, file tracking, navigation, active file highlighting, live reload triggering). Client-side JavaScript minimal (theme management, reload execution).
 
 ## Constraints
 
-- Non-recursive (flat directories only)
+- Non-recursive markdown tracking (flat directories only); images served from subdirectories
 - Alphabetical file ordering only
 - All files pre-rendered in memory
