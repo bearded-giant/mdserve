@@ -174,20 +174,26 @@
             pointer-events: none;
         }
 
-        /* File Navigation List */
-        .file-list {
+        /* File Navigation Tree */
+        .file-tree {
             list-style: none;
             padding: 0;
             margin: 0;
         }
 
-        .file-list li {
-            margin-bottom: 4px;
+        .file-tree ul {
+            list-style: none;
+            padding-left: 16px;
+            margin: 0;
         }
 
-        .file-list a {
+        .file-tree li {
+            margin-bottom: 2px;
+        }
+
+        .file-tree a {
             display: block;
-            padding: 8px 12px;
+            padding: 6px 12px;
             color: var(--text-color);
             text-decoration: none;
             border-radius: 6px;
@@ -195,16 +201,29 @@
             font-size: 14px;
         }
 
-        .file-list a:hover,
-        .file-list a:focus-visible {
+        .file-tree a:hover,
+        .file-tree a:focus-visible {
             background: var(--border-color-light);
             outline: none;
         }
 
-        .file-list a.active {
+        .file-tree a.active {
             background: var(--border-color-light);
             color: var(--text-color);
             font-weight: 600;
+        }
+
+        .file-tree summary {
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-color);
+            border-radius: 6px;
+        }
+
+        .file-tree summary:hover {
+            background: var(--border-color-light);
         }
 
         /* Main Content Area */
@@ -670,12 +689,19 @@
 <nav class="sidebar">
     <div class="sidebar-header"></div>
     <div class="sidebar-content">
-        <ul class="file-list">
-            {% for file in files %}
+        <ul class="file-tree">
+            {% for item in tree recursive %}
             <li>
-                <a href="/{{ file.name }}"{% if file.name == current_file %} class="active"{% endif %}>
-                    {{ file.name }}
+                {% if item.is_dir %}
+                <details open>
+                    <summary>{{ item.name }}</summary>
+                    <ul>{{ loop(item.children) }}</ul>
+                </details>
+                {% else %}
+                <a href="/{{ item.path|safe }}"{% if item.path == current_file %} class="active"{% endif %}>
+                    {{ item.name }}
                 </a>
+                {% endif %}
             </li>
             {% endfor %}
         </ul>

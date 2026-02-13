@@ -73,8 +73,8 @@ command: mdserve --open docs/
 run_in_background: true
 ```
 
-This gives the user a sidebar to navigate between files. Only the
-immediate directory is watched (non-recursive).
+This gives the user a collapsible tree sidebar to navigate between files,
+including any nested subdirectories.
 
 ## Mermaid diagrams
 

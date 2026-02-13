@@ -78,20 +78,21 @@ tracked_files = {
 is_directory_mode = false
 ```
 
-Directory mode:
+Directory mode (keys are relative paths):
 ```
 base_dir = /path/to/docs/
 tracked_files = {
+  "README.md": TrackedFile { ... },
   "api.md": TrackedFile { ... },
-  "guide.md": TrackedFile { ... },
-  "README.md": TrackedFile { ... }
+  "guides/getting-started.md": TrackedFile { ... },
+  "guides/advanced.md": TrackedFile { ... }
 }
 is_directory_mode = true
 ```
 
 ### Live Reload
 
-Uses [notify](https://github.com/notify-rs/notify) crate to watch base directory (non-recursive):
+Uses [notify](https://github.com/notify-rs/notify) crate to watch base directory recursively:
 - Create/modify: Refresh file, add if new (directory mode only)
 - Delete: Remove from tracking
 - Rename: Remove old, add new
@@ -109,14 +110,14 @@ File changes flow:
 
 Single unified router handles both modes:
 - `GET /` → First file alphabetically
-- `GET /*filepath` → Markdown files (matched by basename) or images (including subdirectories)
+- `GET /*filepath` → Markdown files (matched by relative path) or images (including subdirectories)
 - `GET /ws` → WebSocket connection
 - `GET /mermaid.min.js` → Bundled Mermaid library
 
 The `/*filepath` wildcard route serves both markdown and images. Markdown lookup
-uses the basename only (tracked files are flat), while image paths can include
-subdirectories (e.g. `images/arch.png`). Directory traversal is blocked by
-`canonicalize` + `starts_with(base_dir)` validation in the static file handler.
+uses the relative path as key (e.g. `docs/guide.md`), matching the URL path
+directly. Directory traversal is blocked by `canonicalize` + `starts_with(base_dir)`
+validation in the static file handler.
 
 ### Rendering
 
@@ -131,8 +132,8 @@ Template variables:
 - `content`: Pre-rendered markdown HTML
 - `mermaid_enabled`: Boolean flag, conditionally includes Mermaid.js when diagrams detected
 - `show_navigation`: Controls sidebar visibility
-- `files`: List of tracked files (directory mode)
-- `current_file`: Active file name (directory mode)
+- `tree`: Nested tree of tracked files and directories (directory mode)
+- `current_file`: Active file's relative path (directory mode)
 
 ## Design Decisions
 
@@ -140,12 +141,12 @@ Template variables:
 
 **Pre-rendered caching**: All tracked files rendered to HTML in memory on startup and file change. Serving always from memory, never from disk.
 
-**Non-recursive watching**: Only the immediate directory is watched for markdown changes, no subdirectories. Images in subdirectories are served on request but not watched.
+**Recursive directory tree**: Subdirectories are scanned and watched recursively. The sidebar renders a collapsible tree using native `<details>/<summary>` elements with zero JS.
 
 **Server-side logic**: Most logic lives server-side (markdown rendering, file tracking, navigation, active file highlighting, live reload triggering). Client-side JavaScript minimal (theme management, reload execution).
 
 ## Constraints
 
-- Non-recursive markdown tracking (flat directories only); images served from subdirectories
+- Recursive markdown tracking across subdirectories; images also served from subdirectories
 - Alphabetical file ordering only
 - All files pre-rendered in memory

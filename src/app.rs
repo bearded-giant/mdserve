@@ -55,23 +55,26 @@ enum ServerMessage {
     Pong,
 }
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub(crate) fn scan_markdown_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut md_files = Vec::new();
+    scan_recursive(dir, &mut md_files)?;
+    md_files.sort();
+    Ok(md_files)
+}
 
+fn scan_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-
-        if path.is_file() && is_markdown_file(&path) {
-            md_files.push(path);
+        if path.is_dir() {
+            scan_recursive(&path, files)?;
+        } else if path.is_file() && is_markdown_file(&path) {
+            files.push(path);
         }
     }
-
-    md_files.sort();
-
-    Ok(md_files)
+    Ok(())
 }
 
 fn is_markdown_file(path: &Path) -> bool {
@@ -105,12 +108,17 @@ impl MarkdownState {
             let content = fs::read_to_string(&file_path)?;
             let html = Self::markdown_to_html(&content)?;
 
-            let filename = file_path.file_name().unwrap().to_string_lossy().to_string();
+            let canonical = file_path.canonicalize().unwrap_or(file_path);
+            let key = canonical
+                .strip_prefix(&base_dir)
+                .unwrap_or(&canonical)
+                .to_string_lossy()
+                .to_string();
 
             tracked_files.insert(
-                filename,
+                key,
                 TrackedFile {
-                    path: file_path,
+                    path: canonical,
                     last_modified,
                     html,
                 },
@@ -151,9 +159,13 @@ impl MarkdownState {
     }
 
     fn add_tracked_file(&mut self, file_path: PathBuf) -> Result<()> {
-        let filename = file_path.file_name().unwrap().to_string_lossy().to_string();
+        let key = file_path
+            .strip_prefix(&self.base_dir)
+            .unwrap_or(&file_path)
+            .to_string_lossy()
+            .to_string();
 
-        if self.tracked_files.contains_key(&filename) {
+        if self.tracked_files.contains_key(&key) {
             return Ok(());
         }
 
@@ -161,7 +173,7 @@ impl MarkdownState {
         let content = fs::read_to_string(&file_path)?;
 
         self.tracked_files.insert(
-            filename,
+            key,
             TrackedFile {
                 path: file_path,
                 last_modified: metadata.modified()?,
@@ -191,21 +203,21 @@ async fn handle_markdown_file_change(path: &Path, state: &SharedMarkdownState) {
         return;
     }
 
-    let filename = path.file_name().and_then(|n| n.to_str()).map(String::from);
-    let Some(filename) = filename else {
-        return;
-    };
-
     let mut state_guard = state.lock().await;
 
-    // If file is already tracked, refresh its content
-    if state_guard.tracked_files.contains_key(&filename) {
-        if state_guard.refresh_file(&filename).is_ok() {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let key = canonical
+        .strip_prefix(&state_guard.base_dir)
+        .unwrap_or(&canonical)
+        .to_string_lossy()
+        .to_string();
+
+    if state_guard.tracked_files.contains_key(&key) {
+        if state_guard.refresh_file(&key).is_ok() {
             let _ = state_guard.change_tx.send(ServerMessage::Reload);
         }
     } else if state_guard.is_directory_mode {
-        // New file in directory mode - add and reload
-        if state_guard.add_tracked_file(path.to_path_buf()).is_ok() {
+        if state_guard.add_tracked_file(canonical).is_ok() {
             let _ = state_guard.change_tx.send(ServerMessage::Reload);
         }
     }
@@ -301,7 +313,7 @@ fn new_router(
         Config::default(),
     )?;
 
-    watcher.watch(&base_dir, RecursiveMode::NonRecursive)?;
+    watcher.watch(&base_dir, RecursiveMode::Recursive)?;
 
     tokio::spawn(async move {
         let _watcher = watcher;
@@ -469,27 +481,74 @@ async fn serve_file(
     State(state): State<SharedMarkdownState>,
 ) -> axum::response::Response {
     if filepath.ends_with(".md") || filepath.ends_with(".markdown") {
-        // markdown files are tracked by basename only (flat, non-recursive)
-        let filename = Path::new(&filepath)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(&filepath);
-
         let mut state = state.lock().await;
 
-        if !state.tracked_files.contains_key(filename) {
+        if !state.tracked_files.contains_key(&filepath) {
             return (StatusCode::NOT_FOUND, Html("File not found".to_string())).into_response();
         }
 
-        let _ = state.refresh_file(filename);
+        let _ = state.refresh_file(&filepath);
 
-        let (status, html) = render_markdown(&state, filename).await;
+        let (status, html) = render_markdown(&state, &filepath).await;
         (status, html).into_response()
     } else if is_image_file(&filepath) {
         serve_static_file_inner(filepath, state).await
     } else {
         (StatusCode::NOT_FOUND, Html("File not found".to_string())).into_response()
     }
+}
+
+fn build_file_tree(paths: &[String]) -> Vec<Value> {
+    build_tree_level(paths, "")
+}
+
+fn build_tree_level(paths: &[String], prefix: &str) -> Vec<Value> {
+    let mut dirs: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut files: Vec<String> = Vec::new();
+
+    for path in paths {
+        if let Some(slash_pos) = path.find('/') {
+            let dir_name = &path[..slash_pos];
+            let rest = &path[slash_pos + 1..];
+            dirs.entry(dir_name.to_string())
+                .or_default()
+                .push(rest.to_string());
+        } else {
+            files.push(path.clone());
+        }
+    }
+
+    let mut items: Vec<(String, Value)> = Vec::new();
+
+    for (dir_name, sub_paths) in &dirs {
+        let dir_prefix = if prefix.is_empty() {
+            dir_name.clone()
+        } else {
+            format!("{}/{}", prefix, dir_name)
+        };
+        let children = build_tree_level(sub_paths, &dir_prefix);
+        let mut map = HashMap::new();
+        map.insert("name".to_string(), Value::from(dir_name.clone()));
+        map.insert("is_dir".to_string(), Value::from(true));
+        map.insert("children".to_string(), Value::from(children));
+        items.push((dir_name.to_lowercase(), Value::from_object(map)));
+    }
+
+    for file_name in &files {
+        let full_path = if prefix.is_empty() {
+            file_name.clone()
+        } else {
+            format!("{}/{}", prefix, file_name)
+        };
+        let mut map = HashMap::new();
+        map.insert("name".to_string(), Value::from(file_name.clone()));
+        map.insert("path".to_string(), Value::from(full_path));
+        map.insert("is_dir".to_string(), Value::from(false));
+        items.push((file_name.to_lowercase(), Value::from_object(map)));
+    }
+
+    items.sort_by(|a, b| a.0.cmp(&b.0));
+    items.into_iter().map(|(_, v)| v).collect()
 }
 
 async fn render_markdown(state: &MarkdownState, current_file: &str) -> (StatusCode, Html<String>) {
@@ -514,22 +573,13 @@ async fn render_markdown(state: &MarkdownState, current_file: &str) -> (StatusCo
 
     let rendered = if state.show_navigation() {
         let filenames = state.get_sorted_filenames();
-        let files: Vec<Value> = filenames
-            .iter()
-            .map(|name| {
-                Value::from_object({
-                    let mut map = std::collections::HashMap::new();
-                    map.insert("name".to_string(), Value::from(name.clone()));
-                    map
-                })
-            })
-            .collect();
+        let tree = build_file_tree(&filenames);
 
         match template.render(context! {
             content => content,
             mermaid_enabled => has_mermaid,
             show_navigation => true,
-            files => files,
+            tree => tree,
             current_file => current_file,
         }) {
             Ok(r) => r,
