@@ -40,7 +40,7 @@ Key types in `app.rs`:
 - `TrackedFile` -- per-file: path, last_modified timestamp, pre-rendered HTML
 - `SharedMarkdownState` = `Arc<Mutex<MarkdownState>>`
 
-Data flow: file system events (notify crate, non-recursive) -> mpsc channel ->
+Data flow: file system events (notify crate, recursive) -> mpsc channel ->
 `handle_file_event` -> state update + broadcast `ServerMessage::Reload` ->
 WebSocket clients -> `window.location.reload()`
 
@@ -52,7 +52,8 @@ and by canonicalize + starts_with check for static files.
 
 - **Agent-companion scope.** Not a documentation platform or configurable server.
 - **Zero config.** `mdserve file.md` must work with no flags or config files.
-- **Non-recursive.** Directory mode watches only the immediate directory.
+- **Recursive directory tree.** Directory mode recursively scans and watches
+  subdirectories, rendering a collapsible tree sidebar.
 - **Pre-rendered in memory.** All tracked files rendered to HTML on startup and
   on change. Serving is always from memory, never from disk.
 - **Minimal client-side JS.** Client JS handles theme selection, sidebar toggle,

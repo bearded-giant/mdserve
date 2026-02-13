@@ -98,7 +98,7 @@ fn test_scan_markdown_files_with_markdown_files() {
 }
 
 #[test]
-fn test_scan_markdown_files_ignores_subdirectories() {
+fn test_scan_markdown_files_includes_subdirectories() {
     let temp_dir = tempdir().expect("Failed to create temp dir");
 
     fs::write(temp_dir.path().join("root.md"), "# Root").expect("Failed to write");
@@ -109,8 +109,13 @@ fn test_scan_markdown_files_ignores_subdirectories() {
 
     let result = scan_markdown_files(temp_dir.path()).expect("Failed to scan");
 
-    assert_eq!(result.len(), 1);
-    assert_eq!(result[0].file_name().unwrap().to_str().unwrap(), "root.md");
+    assert_eq!(result.len(), 2);
+    let filenames: Vec<_> = result
+        .iter()
+        .map(|p| p.file_name().unwrap().to_str().unwrap())
+        .collect();
+    assert!(filenames.contains(&"root.md"));
+    assert!(filenames.contains(&"nested.md"));
 }
 
 #[test]
@@ -640,7 +645,7 @@ async fn test_directory_mode_has_navigation_sidebar() {
     let body = response.text();
 
     assert!(body.contains(r#"<nav class="sidebar">"#));
-    assert!(body.contains(r#"<ul class="file-list">"#));
+    assert!(body.contains(r#"<ul class="file-tree">"#));
     assert!(body.contains("test1.md"));
     assert!(body.contains("test2.markdown"));
     assert!(body.contains("test3.md"));
@@ -656,7 +661,7 @@ async fn test_single_file_mode_no_navigation_sidebar() {
 
     assert!(!body.contains(r#"<nav class="sidebar">"#));
     assert!(!body.contains("<h3>Files</h3>"));
-    assert!(!body.contains(r#"<ul class="file-list">"#));
+    assert!(!body.contains(r#"<ul class="file-tree">"#));
 }
 
 #[tokio::test]
@@ -1191,4 +1196,103 @@ async fn test_same_dir_image_still_works_with_wildcard_route() {
     let response = server.get("/photo.jpg").await;
     assert_eq!(response.status_code(), 200);
     assert_eq!(response.header("content-type"), "image/jpeg");
+}
+
+#[test]
+fn test_scan_markdown_files_deep_nesting() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+
+    fs::write(temp_dir.path().join("root.md"), "# Root").expect("Failed to write");
+
+    let level1 = temp_dir.path().join("level1");
+    fs::create_dir(&level1).expect("Failed to create level1");
+    fs::write(level1.join("l1.md"), "# Level 1").expect("Failed to write");
+
+    let level2 = level1.join("level2");
+    fs::create_dir(&level2).expect("Failed to create level2");
+    fs::write(level2.join("l2.md"), "# Level 2").expect("Failed to write");
+
+    let level3 = level2.join("level3");
+    fs::create_dir(&level3).expect("Failed to create level3");
+    fs::write(level3.join("l3.md"), "# Level 3").expect("Failed to write");
+
+    let result = scan_markdown_files(temp_dir.path()).expect("Failed to scan");
+
+    assert_eq!(result.len(), 4);
+}
+
+#[tokio::test]
+async fn test_directory_mode_serves_nested_files() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+
+    fs::write(temp_dir.path().join("root.md"), "# Root File").expect("Failed to write");
+
+    let docs_dir = temp_dir.path().join("docs");
+    fs::create_dir(&docs_dir).expect("Failed to create docs dir");
+    fs::write(docs_dir.join("guide.md"), "# Guide\n\nGuide content").expect("Failed to write");
+
+    let base_dir = temp_dir.path().to_path_buf();
+    let tracked_files = scan_markdown_files(&base_dir).expect("Failed to scan");
+    let router = new_router(base_dir, tracked_files, true).expect("Failed to create router");
+    let server = TestServer::new(router).expect("Failed to create test server");
+
+    let response = server.get("/docs/guide.md").await;
+    assert_eq!(response.status_code(), 200);
+    let body = response.text();
+    assert!(body.contains("<h1>Guide</h1>"));
+    assert!(body.contains("Guide content"));
+}
+
+#[tokio::test]
+async fn test_directory_mode_tree_sidebar() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+
+    fs::write(temp_dir.path().join("readme.md"), "# Readme").expect("Failed to write");
+
+    let docs_dir = temp_dir.path().join("docs");
+    fs::create_dir(&docs_dir).expect("Failed to create docs dir");
+    fs::write(docs_dir.join("guide.md"), "# Guide").expect("Failed to write");
+
+    let base_dir = temp_dir.path().to_path_buf();
+    let tracked_files = scan_markdown_files(&base_dir).expect("Failed to scan");
+    let router = new_router(base_dir, tracked_files, true).expect("Failed to create router");
+    let server = TestServer::new(router).expect("Failed to create test server");
+
+    let response = server.get("/readme.md").await;
+    assert_eq!(response.status_code(), 200);
+    let body = response.text();
+
+    assert!(body.contains(r#"<ul class="file-tree">"#));
+    assert!(body.contains("<details"));
+    assert!(body.contains("<summary>"));
+    assert!(body.contains("docs"));
+    assert!(body.contains("guide.md"));
+}
+
+#[tokio::test]
+async fn test_nested_file_active_highlighting() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+
+    fs::write(temp_dir.path().join("root.md"), "# Root").expect("Failed to write");
+
+    let docs_dir = temp_dir.path().join("docs");
+    fs::create_dir(&docs_dir).expect("Failed to create docs dir");
+    fs::write(docs_dir.join("guide.md"), "# Guide").expect("Failed to write");
+
+    let base_dir = temp_dir.path().to_path_buf();
+    let tracked_files = scan_markdown_files(&base_dir).expect("Failed to scan");
+    let router = new_router(base_dir, tracked_files, true).expect("Failed to create router");
+    let server = TestServer::new(router).expect("Failed to create test server");
+
+    let response = server.get("/docs/guide.md").await;
+    assert_eq!(response.status_code(), 200);
+    let body = response.text();
+
+    assert!(
+        body.contains(r#"href="/docs/guide.md" class="active""#),
+        "nested file should have active class"
+    );
+
+    let active_count = body.matches(r#"class="active""#).count();
+    assert_eq!(active_count, 1, "Should have exactly one active link");
 }
